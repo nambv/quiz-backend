@@ -174,3 +174,248 @@ func TestWebSocketLifecycle(t *testing.T) {
 	assert.Equal(t, "alice", lbUpdate.Leaderboard[0].UserID)
 	assert.Greater(t, lbUpdate.Leaderboard[0].Score, 0)
 }
+
+func TestStartQuizEndpoint(t *testing.T) {
+	server, _ := setupTestServer(t)
+	quizID := "quiz-vocab-01"
+
+	// Start quiz that has no session yet → error
+	resp, err := http.Post(server.URL+"/api/quiz/"+quizID+"/start", "application/json", nil)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+
+	// Create a session by joining via WebSocket, then start
+	conn := wsConnect(t, server, quizID)
+	sendEnvelope(t, conn, "join", models.JoinPayload{UserID: "alice", Username: "Alice"})
+	_ = readUntilType(t, conn, models.TypeQuizState)
+
+	resp2, err := http.Post(server.URL+"/api/quiz/"+quizID+"/start", "application/json", nil)
+	require.NoError(t, err)
+	defer func() { _ = resp2.Body.Close() }()
+	assert.Equal(t, http.StatusOK, resp2.StatusCode)
+
+	var body map[string]string
+	require.NoError(t, json.NewDecoder(resp2.Body).Decode(&body))
+	assert.Equal(t, "started", body["status"])
+
+	// Starting again → error (already started)
+	resp3, err := http.Post(server.URL+"/api/quiz/"+quizID+"/start", "application/json", nil)
+	require.NoError(t, err)
+	defer func() { _ = resp3.Body.Close() }()
+	assert.Equal(t, http.StatusBadRequest, resp3.StatusCode)
+}
+
+func TestLeaderboardEndpoint(t *testing.T) {
+	server, quizSvc := setupTestServer(t)
+	quizID := "quiz-vocab-01"
+
+	// Empty leaderboard
+	resp, err := http.Get(server.URL + "/api/quiz/" + quizID + "/leaderboard")
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	// Join, start, answer, then check leaderboard via REST
+	conn := wsConnect(t, server, quizID)
+	sendEnvelope(t, conn, "join", models.JoinPayload{UserID: "alice", Username: "Alice"})
+	_ = readUntilType(t, conn, models.TypeQuizState)
+	require.NoError(t, quizSvc.StartQuiz(quizID))
+	_ = readUntilType(t, conn, models.TypeQuestion)
+
+	sendEnvelope(t, conn, "answer", models.AnswerPayload{QuestionID: "q1", AnswerID: "a2"})
+	_ = readUntilType(t, conn, models.TypeScoreResult)
+	_ = readUntilType(t, conn, models.TypeLeaderboardUpdate)
+
+	resp2, err := http.Get(server.URL + "/api/quiz/" + quizID + "/leaderboard")
+	require.NoError(t, err)
+	defer func() { _ = resp2.Body.Close() }()
+	assert.Equal(t, http.StatusOK, resp2.StatusCode)
+
+	var lbResp struct {
+		Leaderboard []models.LeaderboardEntry `json:"leaderboard"`
+	}
+	require.NoError(t, json.NewDecoder(resp2.Body).Decode(&lbResp))
+	require.Len(t, lbResp.Leaderboard, 1)
+	assert.Equal(t, "alice", lbResp.Leaderboard[0].UserID)
+}
+
+func TestWebSocketWrongAnswer(t *testing.T) {
+	server, quizSvc := setupTestServer(t)
+	quizID := "quiz-vocab-01"
+
+	conn := wsConnect(t, server, quizID)
+	sendEnvelope(t, conn, "join", models.JoinPayload{UserID: "alice", Username: "Alice"})
+	_ = readUntilType(t, conn, models.TypeQuizState)
+	require.NoError(t, quizSvc.StartQuiz(quizID))
+	_ = readUntilType(t, conn, models.TypeQuestion)
+
+	// Answer incorrectly (correct is "a2")
+	sendEnvelope(t, conn, "answer", models.AnswerPayload{QuestionID: "q1", AnswerID: "a1"})
+	scoreEnv := readUntilType(t, conn, models.TypeScoreResult)
+
+	var result models.ScoreResultPayload
+	require.NoError(t, json.Unmarshal(scoreEnv.Payload, &result))
+	assert.False(t, result.Correct)
+	assert.Equal(t, 0, result.Points)
+}
+
+func TestWebSocketDuplicateJoin(t *testing.T) {
+	server, _ := setupTestServer(t)
+	quizID := "quiz-vocab-01"
+
+	conn := wsConnect(t, server, quizID)
+	sendEnvelope(t, conn, "join", models.JoinPayload{UserID: "alice", Username: "Alice"})
+	_ = readUntilType(t, conn, models.TypeQuizState)
+
+	// Same user joins again on a new connection
+	conn2 := wsConnect(t, server, quizID)
+	sendEnvelope(t, conn2, "join", models.JoinPayload{UserID: "alice", Username: "Alice"})
+	env := readUntilType(t, conn2, models.TypeError)
+
+	var errPayload models.ErrorPayload
+	require.NoError(t, json.Unmarshal(env.Payload, &errPayload))
+	assert.Equal(t, "ALREADY_JOINED", errPayload.Code)
+}
+
+func TestWebSocketAnswerWithoutJoin(t *testing.T) {
+	server, _ := setupTestServer(t)
+	quizID := "quiz-vocab-01"
+
+	conn := wsConnect(t, server, quizID)
+	sendEnvelope(t, conn, "answer", models.AnswerPayload{QuestionID: "q1", AnswerID: "a2"})
+	env := readUntilType(t, conn, models.TypeError)
+
+	var errPayload models.ErrorPayload
+	require.NoError(t, json.Unmarshal(env.Payload, &errPayload))
+	assert.Equal(t, "NOT_JOINED", errPayload.Code)
+}
+
+func TestWebSocketUnknownMessageType(t *testing.T) {
+	server, _ := setupTestServer(t)
+	quizID := "quiz-vocab-01"
+
+	conn := wsConnect(t, server, quizID)
+	sendEnvelope(t, conn, "join", models.JoinPayload{UserID: "alice", Username: "Alice"})
+	_ = readUntilType(t, conn, models.TypeQuizState)
+
+	sendEnvelope(t, conn, "unknown_type", nil)
+	env := readUntilType(t, conn, models.TypeError)
+
+	var errPayload models.ErrorPayload
+	require.NoError(t, json.Unmarshal(env.Payload, &errPayload))
+	assert.Equal(t, "UNKNOWN_TYPE", errPayload.Code)
+}
+
+func TestWebSocketInvalidQuiz(t *testing.T) {
+	server, _ := setupTestServer(t)
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/ws/quiz/nonexistent"
+	_, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err == nil {
+		t.Fatal("expected error connecting to nonexistent quiz")
+	}
+	if resp != nil {
+		assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+		_ = resp.Body.Close()
+	}
+}
+
+func TestWebSocketAnswerWrongQuestion(t *testing.T) {
+	server, quizSvc := setupTestServer(t)
+	quizID := "quiz-vocab-01"
+
+	conn := wsConnect(t, server, quizID)
+	sendEnvelope(t, conn, "join", models.JoinPayload{UserID: "alice", Username: "Alice"})
+	_ = readUntilType(t, conn, models.TypeQuizState)
+	require.NoError(t, quizSvc.StartQuiz(quizID))
+	_ = readUntilType(t, conn, models.TypeQuestion)
+
+	// Answer for wrong question ID
+	sendEnvelope(t, conn, "answer", models.AnswerPayload{QuestionID: "q99", AnswerID: "a2"})
+	env := readUntilType(t, conn, models.TypeError)
+
+	var errPayload models.ErrorPayload
+	require.NoError(t, json.Unmarshal(env.Payload, &errPayload))
+	assert.Equal(t, "WRONG_QUESTION", errPayload.Code)
+}
+
+func TestWebSocketAnswerDuplicate(t *testing.T) {
+	server, quizSvc := setupTestServer(t)
+	quizID := "quiz-vocab-01"
+
+	conn := wsConnect(t, server, quizID)
+	sendEnvelope(t, conn, "join", models.JoinPayload{UserID: "alice", Username: "Alice"})
+	_ = readUntilType(t, conn, models.TypeQuizState)
+	require.NoError(t, quizSvc.StartQuiz(quizID))
+	_ = readUntilType(t, conn, models.TypeQuestion)
+
+	sendEnvelope(t, conn, "answer", models.AnswerPayload{QuestionID: "q1", AnswerID: "a2"})
+	_ = readUntilType(t, conn, models.TypeScoreResult)
+	_ = readUntilType(t, conn, models.TypeLeaderboardUpdate)
+
+	// Duplicate answer
+	sendEnvelope(t, conn, "answer", models.AnswerPayload{QuestionID: "q1", AnswerID: "a2"})
+	env := readUntilType(t, conn, models.TypeError)
+
+	var errPayload models.ErrorPayload
+	require.NoError(t, json.Unmarshal(env.Payload, &errPayload))
+	assert.Equal(t, "SCORING_ERROR", errPayload.Code)
+}
+
+func TestWebSocketAnswerBeforeStart(t *testing.T) {
+	server, _ := setupTestServer(t)
+	quizID := "quiz-vocab-01"
+
+	conn := wsConnect(t, server, quizID)
+	sendEnvelope(t, conn, "join", models.JoinPayload{UserID: "alice", Username: "Alice"})
+	_ = readUntilType(t, conn, models.TypeQuizState)
+
+	// Answer before quiz is started
+	sendEnvelope(t, conn, "answer", models.AnswerPayload{QuestionID: "q1", AnswerID: "a2"})
+	env := readUntilType(t, conn, models.TypeError)
+
+	var errPayload models.ErrorPayload
+	require.NoError(t, json.Unmarshal(env.Payload, &errPayload))
+	assert.Equal(t, "QUIZ_NOT_ACTIVE", errPayload.Code)
+}
+
+func TestWebSocketRejoin(t *testing.T) {
+	server, quizSvc := setupTestServer(t)
+	quizID := "quiz-vocab-01"
+
+	conn := wsConnect(t, server, quizID)
+	sendEnvelope(t, conn, "join", models.JoinPayload{UserID: "alice", Username: "Alice"})
+	_ = readUntilType(t, conn, models.TypeQuizState)
+	require.NoError(t, quizSvc.StartQuiz(quizID))
+	_ = readUntilType(t, conn, models.TypeQuestion)
+
+	// Connect a new WS and rejoin as the same user
+	conn2 := wsConnect(t, server, quizID)
+	sendEnvelope(t, conn2, "rejoin", models.RejoinPayload{UserID: "alice", QuizID: quizID})
+	env := readUntilType(t, conn2, models.TypeQuizState)
+
+	var state models.QuizStatePayload
+	require.NoError(t, json.Unmarshal(env.Payload, &state))
+	assert.Equal(t, "active", state.Status)
+	assert.NotNil(t, state.CurrentQuestion)
+}
+
+func TestWebSocketRejoinNotParticipant(t *testing.T) {
+	server, _ := setupTestServer(t)
+	quizID := "quiz-vocab-01"
+
+	// Alice joins to create a session
+	conn := wsConnect(t, server, quizID)
+	sendEnvelope(t, conn, "join", models.JoinPayload{UserID: "alice", Username: "Alice"})
+	_ = readUntilType(t, conn, models.TypeQuizState)
+
+	// Bob tries to rejoin without ever joining
+	conn2 := wsConnect(t, server, quizID)
+	sendEnvelope(t, conn2, "rejoin", models.RejoinPayload{UserID: "bob", QuizID: quizID})
+	env := readUntilType(t, conn2, models.TypeError)
+
+	var errPayload models.ErrorPayload
+	require.NoError(t, json.Unmarshal(env.Payload, &errPayload))
+	assert.Equal(t, "NOT_A_PARTICIPANT", errPayload.Code)
+}

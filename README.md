@@ -13,10 +13,12 @@ See [SYSTEM_DESIGN.md](docs/SYSTEM_DESIGN.md) for full system design documentati
 
 ## Tech Stack
 
-- **Go** — goroutine-per-connection WebSocket handling
+- **Go 1.25+** — goroutine-per-connection WebSocket handling
 - **Redis** — Sorted Sets for leaderboard, Pub/Sub for broadcasting
+- **PostgreSQL** — quiz content, session history, answer persistence
 - **gorilla/websocket** — WebSocket library
-- **Docker Compose** — Go server + Redis
+- **Prometheus** — metrics and observability
+- **Docker Compose** — Go server + Redis + PostgreSQL
 
 ## Quick Start
 
@@ -28,23 +30,29 @@ docker-compose up --build
 
 ### Without Docker
 
-Requires Go 1.24+ and Redis running on localhost:6379.
+Requires Go 1.25+ and optionally Redis on localhost:6379 and PostgreSQL.
 
 ```bash
-# Start Redis
-redis-server &
-
-# Run the server
+# Run the server (falls back gracefully if Redis/PostgreSQL unavailable)
 go run cmd/server/main.go
 ```
 
-The server starts on `http://localhost:8080`. If Redis is unavailable, the server falls back to an in-memory leaderboard automatically.
+**Environment variables:**
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SERVER_ADDR` | `:8080` | Server listen address |
+| `REDIS_ADDR` | `localhost:6379` | Redis address |
+| `DATABASE_URL` | *(empty)* | PostgreSQL connection string |
+
+The server starts on `http://localhost:8080`. If Redis is unavailable, it falls back to an in-memory leaderboard. If PostgreSQL is unavailable, it uses mock quiz data.
 
 ## API Endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/health` | Health check with Redis status |
+| GET | `/health` | Health check (Redis + PostgreSQL status) |
+| GET | `/metrics` | Prometheus metrics |
 | POST | `/api/quiz/{quizId}/join` | Join a quiz, get WebSocket URL |
 | POST | `/api/quiz/{quizId}/start` | Start the quiz (transition to active) |
 | GET | `/api/quiz/{quizId}/leaderboard` | REST leaderboard fallback |
@@ -64,6 +72,8 @@ Connect to `/ws/quiz/{quizId}`, then send JSON messages:
 
 Server sends: `quiz_state`, `question`, `score_result`, `leaderboard_update`, `user_joined`, `user_left`, `quiz_ended`, `error`.
 
+Reconnection is supported — send a `rejoin` message with `userId` to resume a session.
+
 ## Demo Quiz
 
 A pre-loaded quiz `quiz-vocab-01` with 5 vocabulary questions is available.
@@ -76,13 +86,36 @@ A pre-loaded quiz `quiz-vocab-01` with 5 vocabulary questions is available.
 
 ## Testing
 
+**57 test cases** across 7 packages — **82.7% coverage** (excluding external-service-dependent code).
+
 ```bash
 # Run all tests with race detector
+go test -race ./...
+
+# Run with verbose output
 go test -race -v ./...
+
+# Run with coverage report
+go test -race -coverpkg=./internal/handler/,./internal/hub/,./internal/quiz/,./internal/scoring/,./internal/config/,./internal/metrics/,./pkg/middleware/ -coverprofile=coverage.out ./...
+go tool cover -func=coverage.out
+
+# Lint
+golangci-lint run
 
 # Build
 go build -o bin/quiz-server cmd/server/main.go
 ```
+
+| Package | Tests | Coverage | What's tested |
+|---------|-------|----------|---------------|
+| `internal/handler` | 15 | 92% | REST endpoints, full WebSocket lifecycle, error paths, rejoin |
+| `internal/hub` | 13 | 87% | Room management, broadcast, routing, send-to-user, buffer overflow |
+| `internal/quiz` | 17 | 82% | State machine, timer advancement, quiz completion, mock repos |
+| `internal/scoring` | 11 | 92% | Time-weighted scoring, idempotency, ranking, leaderboard ops |
+| `internal/config` | 2 | 100% | Defaults and env var overrides |
+| `pkg/middleware` | 6 | 92% | Logging, panic recovery, CORS preflight |
+
+See [docs/TEST_CASES.md](docs/TEST_CASES.md) for the full test case definitions.
 
 ## Project Structure
 
@@ -90,13 +123,16 @@ go build -o bin/quiz-server cmd/server/main.go
 ├── cmd/server/main.go          # Entry point, dependency wiring, graceful shutdown
 ├── internal/
 │   ├── config/                  # Environment-based configuration
-│   ├── handler/                 # HTTP + WebSocket handlers
+│   ├── handler/                 # HTTP + WebSocket handlers, integration tests
 │   ├── hub/                     # WebSocket connection manager, room broadcasting
+│   ├── metrics/                 # Prometheus metrics (SLI-aligned)
 │   ├── models/                  # Shared types, message protocol
 │   ├── quiz/                    # Quiz session logic, mock data
+│   ├── repository/              # PostgreSQL repository layer (pgx)
 │   └── scoring/                 # Score calculation, leaderboard (Redis + in-memory)
 ├── pkg/middleware/              # Logging, recovery, CORS
-├── docs/                        # Design docs, AI collaboration log
+├── db/init.sql                  # PostgreSQL schema and seed data
+├── docs/                        # System design, AI collaboration log
 ├── docker-compose.yml
 ├── Dockerfile
 └── Makefile
