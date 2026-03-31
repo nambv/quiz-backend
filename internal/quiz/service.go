@@ -88,6 +88,21 @@ func (s *Service) QuizExists(quizID string) bool {
 	return ok
 }
 
+// ListQuizzes returns a summary of all available quizzes.
+func (s *Service) ListQuizzes() []map[string]any {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	result := make([]map[string]any, 0, len(s.quizzes))
+	for _, q := range s.quizzes {
+		result = append(result, map[string]any{
+			"id":            q.ID,
+			"title":         q.Title,
+			"questionCount": len(q.Questions),
+		})
+	}
+	return result
+}
+
 // HandleRejoin processes a reconnection from a previously connected client.
 // It validates the user was in the quiz, re-registers the connection, and replays current state.
 func (s *Service) HandleRejoin(c *hub.Client, p models.RejoinPayload) {
@@ -389,6 +404,12 @@ func (s *Service) startQuestionTimer(quizID string, timeLimitSec int) {
 	s.timers[quizID] = time.AfterFunc(time.Duration(timeLimitSec)*time.Second, func() {
 		s.advanceQuestion(quizID)
 	})
+}
+
+// AdvanceQuestion moves to the next question or ends the quiz.
+// Exposed so the handler layer can trigger it via a REST endpoint.
+func (s *Service) AdvanceQuestion(quizID string) {
+	s.advanceQuestion(quizID)
 }
 
 // advanceQuestion moves to the next question or ends the quiz.

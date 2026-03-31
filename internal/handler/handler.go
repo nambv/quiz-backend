@@ -50,8 +50,10 @@ func New(log *slog.Logger, h *hub.Hub, q *quiz.Service, s *scoring.Service, r *r
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /health", h.Health)
 	mux.Handle("GET /metrics", promhttp.Handler())
+	mux.HandleFunc("GET /api/quizzes", h.ListQuizzes)
 	mux.HandleFunc("POST /api/quiz/{quizId}/join", h.JoinQuiz)
 	mux.HandleFunc("POST /api/quiz/{quizId}/start", h.StartQuiz)
+	mux.HandleFunc("POST /api/quiz/{quizId}/next", h.NextQuestion)
 	mux.HandleFunc("GET /api/quiz/{quizId}/leaderboard", h.Leaderboard)
 	mux.HandleFunc("GET /ws/quiz/{quizId}", h.WebSocket)
 }
@@ -90,6 +92,12 @@ func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// ListQuizzes returns all available quizzes.
+func (h *Handler) ListQuizzes(w http.ResponseWriter, r *http.Request) {
+	quizzes := h.quiz.ListQuizzes()
+	writeJSON(w, http.StatusOK, map[string]any{"quizzes": quizzes})
+}
+
 // JoinQuiz validates the quiz exists and returns the WebSocket URL.
 func (h *Handler) JoinQuiz(w http.ResponseWriter, r *http.Request) {
 	quizID := r.PathValue("quizId")
@@ -113,6 +121,13 @@ func (h *Handler) StartQuiz(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "started"})
+}
+
+// NextQuestion advances to the next question immediately.
+func (h *Handler) NextQuestion(w http.ResponseWriter, r *http.Request) {
+	quizID := r.PathValue("quizId")
+	h.quiz.AdvanceQuestion(quizID)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "advanced"})
 }
 
 // Leaderboard returns the current leaderboard as a REST fallback.
