@@ -378,8 +378,13 @@ func (s *Service) StartQuiz(quizID string) error {
 	if !ok {
 		return errQuizNotFound
 	}
-	if session.Status != models.StatusWaiting {
+	if session.Status == models.StatusActive {
 		return errQuizAlreadyStarted
+	}
+
+	// Reset leaderboard for replay if previous session completed
+	if session.Status == models.StatusCompleted {
+		s.scorer.Reset(quizID)
 	}
 
 	quiz := s.quizzes[quizID]

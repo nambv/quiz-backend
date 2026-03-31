@@ -9,7 +9,6 @@ import (
 
 	"github.com/nambuivu/quiz-server/internal/hub"
 	"github.com/nambuivu/quiz-server/internal/models"
-	"github.com/nambuivu/quiz-server/internal/repository"
 	"github.com/nambuivu/quiz-server/internal/scoring"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -45,14 +44,6 @@ func (m *mockSessionRepo) CreateSession(_ context.Context, _ string) (string, er
 }
 
 func (m *mockSessionRepo) UpdateSessionStatus(_ context.Context, _, _ string) error {
-	return m.err
-}
-
-type mockAnswerRepo struct {
-	err error
-}
-
-func (m *mockAnswerRepo) SaveAnswer(_ context.Context, _ *repository.AnswerRecord) error {
 	return m.err
 }
 
