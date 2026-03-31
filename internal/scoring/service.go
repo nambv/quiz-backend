@@ -37,8 +37,8 @@ type Service struct {
 	leaderboard Leaderboard
 	// answered tracks which questions each user has answered: quizID → userID → questionID → true
 	answered map[string]map[string]map[string]bool
-	// usernames maps userID → username for leaderboard display
-	usernames map[string]string
+	// usernames maps quizID → userID → username for leaderboard display
+	usernames map[string]map[string]string
 }
 
 // New creates a scoring Service with the given leaderboard backend.
@@ -47,7 +47,7 @@ func New(log *slog.Logger, lb Leaderboard) *Service {
 		log:         log.With("component", "scoring"),
 		leaderboard: lb,
 		answered:    make(map[string]map[string]map[string]bool),
-		usernames:   make(map[string]string),
+		usernames:   make(map[string]map[string]string),
 	}
 }
 
@@ -60,7 +60,10 @@ func (s *Service) SubmitAnswer(quizID, userID, username, questionID, answerID, c
 	defer s.mu.Unlock()
 
 	// Track username for leaderboard display
-	s.usernames[userID] = username
+	if s.usernames[quizID] == nil {
+		s.usernames[quizID] = make(map[string]string)
+	}
+	s.usernames[quizID][userID] = username
 
 	// Idempotency check
 	if s.answered[quizID] == nil {
@@ -141,8 +144,25 @@ func (s *Service) Reset(quizID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.answered, quizID)
+	delete(s.usernames, quizID)
 	if err := s.leaderboard.ResetQuiz(quizID); err != nil {
 		s.log.Error("failed to reset leaderboard", "quiz_id", quizID, "error", err)
+	}
+}
+
+// RegisterParticipant adds a user to the leaderboard with 0 score so they appear even before answering.
+func (s *Service) RegisterParticipant(quizID, userID, username string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.usernames[quizID] == nil {
+		s.usernames[quizID] = make(map[string]string)
+	}
+	s.usernames[quizID][userID] = username
+
+	// Add to leaderboard with 0 delta so entry exists
+	if err := s.leaderboard.IncrScore(quizID, userID, 0); err != nil {
+		s.log.Error("failed to register participant in leaderboard", "quiz_id", quizID, "user_id", userID, "error", err)
 	}
 }
 
@@ -162,7 +182,7 @@ func (s *Service) GetLeaderboard(quizID string) []models.LeaderboardEntry {
 		entries[i] = models.LeaderboardEntry{
 			Rank:     i + 1,
 			UserID:   r.UserID,
-			Username: s.usernames[r.UserID],
+			Username: s.usernames[quizID][r.UserID],
 			Score:    r.Score,
 		}
 	}

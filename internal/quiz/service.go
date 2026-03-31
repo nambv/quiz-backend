@@ -231,6 +231,14 @@ func (s *Service) HandleJoin(c *hub.Client, p models.JoinPayload) {
 		}
 	}
 
+	// Reset session for replay if completed
+	if session.Status == models.StatusCompleted {
+		session.Status = models.StatusWaiting
+		session.CurrentQuestion = 0
+		s.participants[c.QuizID] = make(map[string]*models.Participant)
+		s.scorer.Reset(c.QuizID)
+	}
+
 	// Initialize participants map
 	if s.participants[c.QuizID] == nil {
 		s.participants[c.QuizID] = make(map[string]*models.Participant)
@@ -250,6 +258,7 @@ func (s *Service) HandleJoin(c *hub.Client, p models.JoinPayload) {
 		UserID:   p.UserID,
 		Username: p.Username,
 	}
+	s.scorer.RegisterParticipant(c.QuizID, p.UserID, p.Username)
 
 	// Register in hub room
 	s.hub.Register(c)
@@ -382,10 +391,8 @@ func (s *Service) StartQuiz(quizID string) error {
 		return errQuizAlreadyStarted
 	}
 
-	// Reset leaderboard for replay if previous session completed
-	if session.Status == models.StatusCompleted {
-		s.scorer.Reset(quizID)
-	}
+	// Always reset scores when starting to ensure clean state
+	s.scorer.Reset(quizID)
 
 	quiz := s.quizzes[quizID]
 	session.Status = models.StatusActive
