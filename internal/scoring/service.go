@@ -21,6 +21,7 @@ const basePoints = 100
 type Leaderboard interface {
 	IncrScore(quizID, userID string, delta int) error
 	GetRankings(quizID string) ([]RankEntry, error)
+	ResetQuiz(quizID string) error
 }
 
 // RankEntry is a raw leaderboard entry from the storage layer.
@@ -133,6 +134,16 @@ func (s *Service) getUserScore(quizID, userID string) int {
 		}
 	}
 	return 0
+}
+
+// Reset clears all scoring state for a quiz.
+func (s *Service) Reset(quizID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.answered, quizID)
+	if err := s.leaderboard.ResetQuiz(quizID); err != nil {
+		s.log.Error("failed to reset leaderboard", "quiz_id", quizID, "error", err)
+	}
 }
 
 // GetLeaderboard returns the current leaderboard with ranks and usernames.

@@ -53,8 +53,11 @@ The server starts on `http://localhost:8080`. If Redis is unavailable, it falls 
 |--------|------|-------------|
 | GET | `/health` | Health check (Redis + PostgreSQL status) |
 | GET | `/metrics` | Prometheus metrics |
+| GET | `/api/quizzes` | List all available quizzes |
 | POST | `/api/quiz/{quizId}/join` | Join a quiz, get WebSocket URL |
 | POST | `/api/quiz/{quizId}/start` | Start the quiz (transition to active) |
+| POST | `/api/quiz/{quizId}/next` | Advance to next question immediately |
+| POST | `/api/quiz/{quizId}/reset` | Reset quiz (clear participants, session, scores) |
 | GET | `/api/quiz/{quizId}/leaderboard` | REST leaderboard fallback |
 | GET | `/ws/quiz/{quizId}` | WebSocket upgrade endpoint |
 
@@ -76,13 +79,15 @@ Reconnection is supported — send a `rejoin` message with `userId` to resume a 
 
 ## Demo Quiz
 
-A pre-loaded quiz `quiz-vocab-01` with 5 vocabulary questions is available.
+When running with Docker (PostgreSQL), the quiz ID is a UUID loaded from the database. Without Docker, a mock quiz `quiz-vocab-01` is available.
 
 **Demo flow:**
-1. `POST /api/quiz/quiz-vocab-01/join` — get WebSocket URL
-2. Connect via WebSocket → send `join` message
-3. `POST /api/quiz/quiz-vocab-01/start` — start the quiz
-4. Answer questions via WebSocket → receive scores and leaderboard updates
+1. `GET /api/quizzes` — discover available quiz IDs
+2. `POST /api/quiz/{quizId}/join` — get WebSocket URL
+3. Connect via WebSocket → send `join` message
+4. `POST /api/quiz/{quizId}/start` — start the quiz
+5. Answer questions via WebSocket → receive scores and leaderboard updates
+6. `POST /api/quiz/{quizId}/reset` — reset to play again
 
 ## Testing
 

@@ -401,6 +401,68 @@ func TestWebSocketRejoin(t *testing.T) {
 	assert.NotNil(t, state.CurrentQuestion)
 }
 
+func TestListQuizzesEndpoint(t *testing.T) {
+	server, _ := setupTestServer(t)
+
+	resp, err := http.Get(server.URL + "/api/quizzes")
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var body struct {
+		Quizzes []struct {
+			ID            string `json:"id"`
+			Title         string `json:"title"`
+			QuestionCount int    `json:"questionCount"`
+		} `json:"quizzes"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	require.NotEmpty(t, body.Quizzes)
+	assert.Equal(t, "quiz-vocab-01", body.Quizzes[0].ID)
+	assert.Equal(t, 5, body.Quizzes[0].QuestionCount)
+}
+
+func TestResetQuizEndpoint(t *testing.T) {
+	server, quizSvc := setupTestServer(t)
+	quizID := "quiz-vocab-01"
+
+	// Join and start a quiz
+	conn := wsConnect(t, server, quizID)
+	sendEnvelope(t, conn, "join", models.JoinPayload{UserID: "alice", Username: "Alice"})
+	_ = readUntilType(t, conn, models.TypeQuizState)
+	require.NoError(t, quizSvc.StartQuiz(quizID))
+	_ = readUntilType(t, conn, models.TypeQuestion)
+
+	// Reset the quiz
+	resp, err := http.Post(server.URL+"/api/quiz/"+quizID+"/reset", "application/json", nil)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var body map[string]string
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	assert.Equal(t, "reset", body["status"])
+
+	// A new user can now join fresh
+	conn2 := wsConnect(t, server, quizID)
+	sendEnvelope(t, conn2, "join", models.JoinPayload{UserID: "bob", Username: "Bob"})
+	env := readUntilType(t, conn2, models.TypeQuizState)
+
+	var state models.QuizStatePayload
+	require.NoError(t, json.Unmarshal(env.Payload, &state))
+	assert.Equal(t, "waiting", state.Status)
+	assert.Len(t, state.Participants, 1)
+}
+
+func TestResetQuizEndpoint_NotFound(t *testing.T) {
+	server, _ := setupTestServer(t)
+
+	resp, err := http.Post(server.URL+"/api/quiz/nonexistent/reset", "application/json", nil)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+}
+
 func TestWebSocketRejoinNotParticipant(t *testing.T) {
 	server, _ := setupTestServer(t)
 	quizID := "quiz-vocab-01"

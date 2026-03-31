@@ -54,6 +54,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/quiz/{quizId}/join", h.JoinQuiz)
 	mux.HandleFunc("POST /api/quiz/{quizId}/start", h.StartQuiz)
 	mux.HandleFunc("POST /api/quiz/{quizId}/next", h.NextQuestion)
+	mux.HandleFunc("POST /api/quiz/{quizId}/reset", h.ResetQuiz)
 	mux.HandleFunc("GET /api/quiz/{quizId}/leaderboard", h.Leaderboard)
 	mux.HandleFunc("GET /ws/quiz/{quizId}", h.WebSocket)
 }
@@ -121,6 +122,16 @@ func (h *Handler) StartQuiz(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "started"})
+}
+
+// ResetQuiz clears all session state for a quiz.
+func (h *Handler) ResetQuiz(w http.ResponseWriter, r *http.Request) {
+	quizID := r.PathValue("quizId")
+	if err := h.quiz.ResetQuiz(quizID); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "reset"})
 }
 
 // NextQuestion advances to the next question immediately.

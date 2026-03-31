@@ -103,6 +103,29 @@ func (s *Service) ListQuizzes() []map[string]any {
 	return result
 }
 
+// ResetQuiz clears all in-memory state for a quiz (session, participants, timers).
+func (s *Service) ResetQuiz(quizID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, ok := s.quizzes[quizID]; !ok {
+		return errQuizNotFound
+	}
+
+	if timer, ok := s.timers[quizID]; ok {
+		timer.Stop()
+		delete(s.timers, quizID)
+	}
+	delete(s.sessions, quizID)
+	delete(s.sessionIDs, quizID)
+	delete(s.participants, quizID)
+
+	s.scorer.Reset(quizID)
+
+	s.log.Info("quiz reset", "quiz_id", quizID)
+	return nil
+}
+
 // HandleRejoin processes a reconnection from a previously connected client.
 // It validates the user was in the quiz, re-registers the connection, and replays current state.
 func (s *Service) HandleRejoin(c *hub.Client, p models.RejoinPayload) {

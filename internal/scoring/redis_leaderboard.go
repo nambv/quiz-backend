@@ -30,6 +30,13 @@ func (r *RedisLeaderboard) IncrScore(quizID, userID string, delta int) error {
 	return r.client.ZIncrBy(ctx, r.leaderboardKey(quizID), float64(delta), userID).Err()
 }
 
+// ResetQuiz removes the leaderboard sorted set for a quiz.
+func (r *RedisLeaderboard) ResetQuiz(quizID string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	return r.client.Del(ctx, r.leaderboardKey(quizID)).Err()
+}
+
 // GetRankings returns all entries sorted by score descending.
 func (r *RedisLeaderboard) GetRankings(quizID string) ([]RankEntry, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)

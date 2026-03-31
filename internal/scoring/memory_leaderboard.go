@@ -31,6 +31,14 @@ func (m *MemoryLeaderboard) IncrScore(quizID, userID string, delta int) error {
 	return nil
 }
 
+// ResetQuiz removes all scores for a quiz.
+func (m *MemoryLeaderboard) ResetQuiz(quizID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.scores, quizID)
+	return nil
+}
+
 // GetRankings returns all entries sorted by score descending.
 func (m *MemoryLeaderboard) GetRankings(quizID string) ([]RankEntry, error) {
 	m.mu.RLock()
